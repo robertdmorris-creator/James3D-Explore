@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Cube Navigator</title>
+    <!-- Custom CSS for Game Aesthetics -->
+    <style><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Cube Navigator</title>
+    <!-- Custom CSS for Game Aesthetics -->
+    <style>
+        body {
+            margin: 0;
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 900px;
+            height: 60vh;
+            background-color: #2c2c2c;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #info-panel {
+            background: #333;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.4);
+            width: 100%;
+            max-width: 900px;
+            text-align: center;
+        }
+        #info-panel h2 {
+            margin-top: 0;
+            font-size: 1.25rem;
+            color: #4CAF50; /* Green highlight */
+        }
+        #info-panel p {
+            margin: 5px 0;
+            font-size: 0.9rem;
+        }
+        .key {
+            display: inline-block;
+            padding: 3px 8px;
+            margin: 0 2px;
+            background-color: #555;
+            border-radius: 4px;
+            border-bottom: 2px solid #333;
+            font-family: monospace;
+            font-weight: bold;
+        }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Canvas will be appended here -->
+    </div>
+
+    <div id="info-panel">
+        <h2>3D Cube Navigator: Flat Forest & House</h2>
+        <p>**The roof teleport bug is fixed!** You should now walk normally inside the house.</p>
+        <p>
+            <span class="key">W</span> (Forward) &middot;
+            <span class="key">S</span> (Backward) &middot;
+            <span class="key">A</span> (Left) &middot;
+            <span class="key">D</span> (Right) &middot;
+            <span class="key">SPACE</span> (Jump)
+        </p>
+    </div>
+
+    <script>
+        // Global variables for Three.js
+        let scene, camera, renderer;
+        let playerCube;
+        const movementSpeed = 0.1;
+       
+        // Constants for the Terrain
+        const planeSize = 100;
+        const planeSegments = 50;
+        const groundYLevel = 0; // Flat ground level
+
+        // House and Interior Global References
+        let houseExteriorWalls; // Reference to the main walls mesh for toggling visibility
+        let houseDoor;          // Reference to the door mesh (stays visible)
+        let interiorGroup;      // The group containing the furniture and interior walls
+        let isInside = false;   // State variable for collision
+
+        // Physics variables for jumping
+        let velocityY = 0;
+        const gravity = -0.02; // Downward acceleration
+        const jumpStrength = 0.5; // Initial upward velocity
+
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false
+        };
+
+        // --- COLLISION CONSTANTS (Player Center Coordinates) ---
+        // House is 6x6. Player is 1x1x1 (radius 0.5).
+        const COLLISION_X_MIN = -2.5; // Left Wall (-3 + 0.5)
+        const COLLISION_X_MAX = 2.5;  // Right Wall (3 - 0.5)
+        const COLLISION_Z_MIN = -2.5; // Back Wall (-3 + 0.5)
+        const COLLISION_Z_MAX = 2.5;  // Front Wall (3 - 0.5)
+
+        // Door X bounds (Player center must be within this range to pass through the Z=3 barrier)
+        const DOOR_X_MIN = -0.5;
+        const DOOR_X_MAX = 0.5;
+        // --------------------------------------------------------
+
+
+        // --- Utility Function: Calculate ground height at given (x, z) ---
+        function getHeight(x, z) {
+            return groundYLevel;
+        }
+
+        // --- Utility Function: Create a simple tree model ---
+        function createTree(x, z) {
+            // Trunk (Brown Cylinder)
+            const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.3, 2, 8);
+            const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x654321 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+
+            // Canopy (Green Cone)
+            const canopyGeometry = new THREE.ConeGeometry(1.5, 3, 8);
+            const canopyMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+            const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+           
+            const tree = new THREE.Group();
+            tree.add(trunk);
+            tree.add(canopy);
+
+            canopy.position.y = 2.5;
+            tree.position.set(x, groundYLevel + 1, z);
+
+            return tree;
+        }
+
+        // --- Utility Function: Create the house interior ---
+        function createInterior(x, z) {
+            const interior = new THREE.Group();
+            const roomWidth = 6;
+            const roomDepth = 6;
+            const roomHeight = 5;
+
+            // Interior Floor (Brown wood color)
+            const floorGeometry = new THREE.PlaneGeometry(roomWidth, roomDepth);
+            const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x5C4033, side: THREE.DoubleSide });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = Math.PI / 2;
+            floor.position.y = 0.01;
+
+            // Interior Wall Material (Light paint color)
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xeee8aa, side: THREE.DoubleSide });
+
+            // Back wall
+            const backWallGeometry = new THREE.PlaneGeometry(roomWidth, roomHeight);
+            const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+            backWall.position.set(0, roomHeight / 2, -roomDepth / 2);
+
+            // Right side wall
+            const sideWallGeometry = new THREE.PlaneGeometry(roomDepth, roomHeight);
+            const sideWallRight = new THREE.Mesh(sideWallGeometry, wallMaterial.clone());
+            sideWallRight.rotation.y = Math.PI / 2;
+            sideWallRight.position.set(roomWidth / 2, roomHeight / 2, 0);
+           
+            // Left side wall
+            const sideWallLeft = new THREE.Mesh(sideWallGeometry, wallMaterial.clone());
+            sideWallLeft.rotation.y = -Math.PI / 2;
+            sideWallLeft.position.set(-roomWidth / 2, roomHeight / 2, 0);
+
+            // Simple table
+            const tableGeometry = new THREE.BoxGeometry(2, 1, 1);
+            const tableMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+            const table = new THREE.Mesh(tableGeometry, tableMaterial);
+            table.position.set(0, 0.5, -1.5); // Placed against the back wall
+
+            interior.add(floor, backWall, sideWallRight, sideWallLeft, table);
+
+            // Position the interior at the house location
+            interior.position.set(x, groundYLevel, z);
+            return interior;
+        }
+
+
+        // --- Utility Function: Create a simple house model ---
+        function createHouse(x, z) {
+            const houseGroup = new THREE.Group();
+            const wallWidth = 6;
+            const wallDepth = 6;
+            const wallHeight = 5;
+           
+            // 1. Walls (Box) - This will be toggled off when inside
+            const wallGeometry = new THREE.BoxGeometry(wallWidth, wallHeight, wallDepth);
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown wood color
+            houseExteriorWalls = new THREE.Mesh(wallGeometry, wallMaterial);
+            houseExteriorWalls.position.y = wallHeight / 2;
+
+            // 2. Roof (Cone) - Stays visible
+            const roofRadius = wallWidth / 1.5;
+            const roofHeight = 3;
+            const roofGeometry = new THREE.ConeGeometry(roofRadius, roofHeight, 4);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0xA52A2A });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.rotation.y = Math.PI / 4;
+            roof.position.y = wallHeight + roofHeight / 2;
+
+            // 3. Door (Narrow Box) - Stays visible
+            const doorGeometry = new THREE.BoxGeometry(1, 2.5, 0.1);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x5C3317 });
+            houseDoor = new THREE.Mesh(doorGeometry, doorMaterial);
+            houseDoor.position.set(0, 2.5 / 2, wallDepth / 2 + 0.05);
+
+            // Add all exterior parts to the group
+            houseGroup.add(houseExteriorWalls);
+            houseGroup.add(roof);
+            houseGroup.add(houseDoor);
+
+            // Create and add the interior group (starts hidden)
+            interiorGroup = createInterior(x, z);
+            interiorGroup.visible = false;
+            scene.add(interiorGroup);
+
+            houseGroup.position.set(x, groundYLevel, z);
+            return houseGroup;
+        }
+
+
+        // --- Initialization Function ---
+        function init() {
+            const container = document.getElementById('game-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // 1. Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x3a3a3a); // Dark background
+
+            // 2. Camera Setup (Perspective)
+            camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+           
+            // 3. Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            container.appendChild(renderer.domElement);
+
+            // 4. Create the Flat Terrain
+            const planeGeometry = new THREE.PlaneGeometry(planeSize, planeSize, planeSegments, planeSegments);
+            const planeMaterial = new THREE.MeshPhongMaterial({ color: 0x6B8E23, side: THREE.DoubleSide, flatShading: true });
+            const groundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+           
+            groundPlane.rotation.x = Math.PI / 2;
+            groundPlane.position.y = groundYLevel;
+            scene.add(groundPlane);
+
+            // 5. Add House in the Center
+            scene.add(createHouse(0, 0)); // Note: createHouse adds the interiorGroup to the scene too
+
+            // 6. Add Player Cube
+            const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
+            const playerMaterial = new THREE.MeshLambertMaterial({ color: 0x4CAF50 });
+            playerCube = new THREE.Mesh(playerGeometry, playerMaterial);
+           
+            playerCube.position.set(0, groundYLevel + 0.5, 10);
+            scene.add(playerCube);
+
+            // 7. Add Trees (Forest)
+            const treeCount = 30;
+            for (let i = 0; i < treeCount; i++) {
+                const x = (Math.random() - 0.5) * 60;
+                const z = (Math.random() - 0.5) * 60;
+                scene.add(createTree(x, z));
+            }
+
+            // 8. Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 3);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
+            directionalLight.position.set(20, 30, 15);
+            scene.add(directionalLight);
+           
+            // 9. Grid Helper
+            const gridHelper = new THREE.GridHelper(planeSize, planeSegments, 0xaaaaaa, 0x555555);
+            gridHelper.position.y = groundYLevel - 0.01;
+            gridHelper.material.opacity = 0.15;
+            gridHelper.material.transparent = true;
+            scene.add(gridHelper);
+
+            // 10. Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+        }
+
+        // --- Handle window resize for responsiveness ---
+        function onWindowResize() {
+            const container = document.getElementById('game-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        // --- Input Handling (Key Press/Release) ---
+        function onKeyDown(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w':
+                    keys.w = true;
+                    break;
+                case 'a':
+                    keys.a = true;
+                    break;
+                case 's':
+                    keys.s = true;
+                    break;
+                case 'd':
+                    keys.d = true;
+                    break;
+                case ' ': // Spacebar for jumping
+                    const stableY = groundYLevel + 0.5;
+                    // Allow jumping if on the ground or on the roof
+                    if (Math.abs(playerCube.position.y - stableY) < 0.05 || Math.abs(playerCube.position.y - 5.5) < 0.05) {
+                        velocityY = jumpStrength;
+                    }
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w':
+                    keys.w = false;
+                    break;
+                case 'a':
+                    keys.a = false;
+                    break;
+                case 's':
+                    keys.s = false;
+                    break;
+                case 'd':
+                    keys.d = false;
+                    break;
+            }
+        }
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            let deltaX = 0;
+            let deltaZ = 0;
+
+            // 1. Calculate intended movement deltas
+            if (keys.w) {
+                deltaZ -= movementSpeed;
+            }
+            if (keys.s) {
+                deltaZ += movementSpeed;
+            }
+            if (keys.a) {
+                deltaX -= movementSpeed;
+            }
+            if (keys.d) {
+                deltaX += movementSpeed;
+            }
+           
+            // Calculate potential next position
+            const nextX = playerCube.position.x + deltaX;
+            const nextZ = playerCube.position.z + deltaZ;
+
+
+            // 2. WALL COLLISION CHECK (Only when outside the house)
+            if (!isInside) {
+                // Check if player is near the house area (optimization)
+                if (nextX > -5 && nextX < 5 && nextZ > -5 && nextZ < 5) {
+                   
+                    // --- X-AXIS COLLISION (Left/Right Walls) ---
+                    // If moving left and hitting the left wall
+                    if (nextX < COLLISION_X_MIN) {
+                        deltaX = 0;
+                        playerCube.position.x = COLLISION_X_MIN;
+                    }
+                    // If moving right and hitting the right wall
+                    else if (nextX > COLLISION_X_MAX) {
+                        deltaX = 0;
+                        playerCube.position.x = COLLISION_X_MAX;
+                    }
+                   
+                    // --- Z-AXIS COLLISION (Back Wall) ---
+                    // If moving backward (S) and hitting the back wall
+                    if (nextZ < COLLISION_Z_MIN) {
+                        deltaZ = 0;
+                        playerCube.position.z = COLLISION_Z_MIN;
+                    }
+                   
+                    // --- Z-AXIS COLLISION (Front Wall & Door) ---
+                    // If moving forward (W) and hitting the front wall boundary
+                    else if (nextZ > COLLISION_Z_MAX) {
+                        // Check if the collision point is outside the door opening
+                        if (nextX < DOOR_X_MIN || nextX > DOOR_X_MAX) {
+                            deltaZ = 0;
+                            playerCube.position.z = COLLISION_Z_MAX;
+                        }
+                        // If the player is within the DOOR_X range, deltaZ is kept, allowing entry.
+                    }
+                }
+            }
+           
+            // 3. Apply the (possibly adjusted) movement
+            playerCube.position.x += deltaX;
+            playerCube.position.z += deltaZ;
+           
+
+            // 4. JUMPING AND VERTICAL PHYSICS UPDATE
+            velocityY += gravity;
+            playerCube.position.y += velocityY;
+
+            const stableY = groundYLevel + 0.5; // Ground landing Y (0.5)
+            const roofLandingY = 5.5;          // Roof landing Y (Center of player cube when standing on 5-unit wall)
+
+            const playerX = playerCube.position.x;
+            const playerZ = playerCube.position.z;
+
+            const isOverRoofArea = (
+                playerX > -3 && playerX < 3 && // Within 6x6 footprint of the house
+                playerZ > -3 && playerZ < 3
+            );
+
+            // A. ROOF COLLISION CHECK (Prioritized)
+            // FIX: We added !isInside here so you only land on the roof if you are outside the house.
+            if (velocityY <= 0 && isOverRoofArea && !isInside) {
+                // If the player passed through the roof landing plane (5.5)
+                if (playerCube.position.y <= roofLandingY) {
+                    playerCube.position.y = roofLandingY;
+                    velocityY = 0;
+                }
+            }
+
+            // B. GROUND COLLISION CHECK (Fallback)
+            // Only check for ground if player is below the ground level (stableY)
+            if (playerCube.position.y < stableY) {
+                playerCube.position.y = stableY;
+                velocityY = 0;
+            }
+           
+            // 5. INTERIOR/EXTERIOR VISIBILITY TOGGLE LOGIC
+            // Door Entrance Zone (Threshold check is crucial for triggering entry/exit)
+            const isNearDoor = (
+                playerX > -1.0 && playerX < 1.0 &&
+                playerZ > 2.0 && playerZ < 3.5      
+            );
+
+            // House Interior Area (player is inside the box)
+            const isInsideWalls = (
+                playerX > -3 && playerX < 3 &&
+                playerZ > -3 && playerZ < 3
+            );
+
+            if (isNearDoor && !isInside) {
+                // Entering
+                isInside = true;
+                houseExteriorWalls.visible = false;
+                interiorGroup.visible = true;
+            } else if (!isNearDoor && isInside && !isInsideWalls) {
+                // Exiting (player is outside the threshold area and is definitely outside the main wall volume)
+                if (playerZ > 3.5 || playerZ < -3.5 || playerX > 3.5 || playerX < -3.5) {
+                    isInside = false;
+                    houseExteriorWalls.visible = true;
+                    interiorGroup.visible = false;
+                }
+            }
+
+
+            // 6. Make the camera follow the player cube
+            const cameraOffset = new THREE.Vector3(0, 5, 5);
+            const playerPos = playerCube.position;
+
+            camera.position.x = playerPos.x + cameraOffset.x;
+            camera.position.y = playerPos.y + cameraOffset.y + 0.5;
+            camera.position.z = playerPos.z + cameraOffset.z;
+
+            camera.lookAt(playerPos.x, playerPos.y, playerPos.z);
+
+            // 7. Render the scene
+            renderer.render(scene, camera);
+        }
+
+        // Start the game initialization and the animation loop on window load
+        window.onload = function () {
+            init();
+            animate();
+        }
+    </script>
+</body>
+</html>
+        body {
+            margin: 0;
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 900px;
+            height: 60vh;
+            background-color: #2c2c2c;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #info-panel {
+            background: #333;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.4);
+            width: 100%;
+            max-width: 900px;
+            text-align: center;
+        }
+        #info-panel h2 {
+            margin-top: 0;
+            font-size: 1.25rem;
+            color: #4CAF50; /* Green highlight */
+        }
+        #info-panel p {
+            margin: 5px 0;
+            font-size: 0.9rem;
+        }
+        .key {
+            display: inline-block;
+            padding: 3px 8px;
+            margin: 0 2px;
+            background-color: #555;
+            border-radius: 4px;
+            border-bottom: 2px solid #333;
+            font-family: monospace;
+            font-weight: bold;
+        }
+    </style>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Canvas will be appended here -->
+    </div>
+
+    <div id="info-panel">
+        <h2>3D Cube Navigator: Flat Forest & House</h2>
+        <p>**The roof teleport bug is fixed!** You should now walk normally inside the house.</p>
+        <p>
+            <span class="key">W</span> (Forward) &middot;
+            <span class="key">S</span> (Backward) &middot;
+            <span class="key">A</span> (Left) &middot;
+            <span class="key">D</span> (Right) &middot;
+            <span class="key">SPACE</span> (Jump)
+        </p>
+    </div>
+
+    <script>
+        // Global variables for Three.js
+        let scene, camera, renderer;
+        let playerCube;
+        const movementSpeed = 0.1;
+       
+        // Constants for the Terrain
+        const planeSize = 100;
+        const planeSegments = 50;
+        const groundYLevel = 0; // Flat ground level
+
+        // House and Interior Global References
+        let houseExteriorWalls; // Reference to the main walls mesh for toggling visibility
+        let houseDoor;          // Reference to the door mesh (stays visible)
+        let interiorGroup;      // The group containing the furniture and interior walls
+        let isInside = false;   // State variable for collision
+
+        // Physics variables for jumping
+        let velocityY = 0;
+        const gravity = -0.02; // Downward acceleration
+        const jumpStrength = 0.5; // Initial upward velocity
+
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false
+        };
+
+        // --- COLLISION CONSTANTS (Player Center Coordinates) ---
+        // House is 6x6. Player is 1x1x1 (radius 0.5).
+        const COLLISION_X_MIN = -2.5; // Left Wall (-3 + 0.5)
+        const COLLISION_X_MAX = 2.5;  // Right Wall (3 - 0.5)
+        const COLLISION_Z_MIN = -2.5; // Back Wall (-3 + 0.5)
+        const COLLISION_Z_MAX = 2.5;  // Front Wall (3 - 0.5)
+
+        // Door X bounds (Player center must be within this range to pass through the Z=3 barrier)
+        const DOOR_X_MIN = -0.5;
+        const DOOR_X_MAX = 0.5;
+        // --------------------------------------------------------
+
+
+        // --- Utility Function: Calculate ground height at given (x, z) ---
+        function getHeight(x, z) {
+            return groundYLevel;
+        }
+
+        // --- Utility Function: Create a simple tree model ---
+        function createTree(x, z) {
+            // Trunk (Brown Cylinder)
+            const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.3, 2, 8);
+            const trunkMaterial = new THREE.MeshLambertMaterial({ color: 0x654321 });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+
+            // Canopy (Green Cone)
+            const canopyGeometry = new THREE.ConeGeometry(1.5, 3, 8);
+            const canopyMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+            const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+           
+            const tree = new THREE.Group();
+            tree.add(trunk);
+            tree.add(canopy);
+
+            canopy.position.y = 2.5;
+            tree.position.set(x, groundYLevel + 1, z);
+
+            return tree;
+        }
+
+        // --- Utility Function: Create the house interior ---
+        function createInterior(x, z) {
+            const interior = new THREE.Group();
+            const roomWidth = 6;
+            const roomDepth = 6;
+            const roomHeight = 5;
+
+            // Interior Floor (Brown wood color)
+            const floorGeometry = new THREE.PlaneGeometry(roomWidth, roomDepth);
+            const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x5C4033, side: THREE.DoubleSide });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = Math.PI / 2;
+            floor.position.y = 0.01;
+
+            // Interior Wall Material (Light paint color)
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0xeee8aa, side: THREE.DoubleSide });
+
+            // Back wall
+            const backWallGeometry = new THREE.PlaneGeometry(roomWidth, roomHeight);
+            const backWall = new THREE.Mesh(backWallGeometry, wallMaterial);
+            backWall.position.set(0, roomHeight / 2, -roomDepth / 2);
+
+            // Right side wall
+            const sideWallGeometry = new THREE.PlaneGeometry(roomDepth, roomHeight);
+            const sideWallRight = new THREE.Mesh(sideWallGeometry, wallMaterial.clone());
+            sideWallRight.rotation.y = Math.PI / 2;
+            sideWallRight.position.set(roomWidth / 2, roomHeight / 2, 0);
+           
+            // Left side wall
+            const sideWallLeft = new THREE.Mesh(sideWallGeometry, wallMaterial.clone());
+            sideWallLeft.rotation.y = -Math.PI / 2;
+            sideWallLeft.position.set(-roomWidth / 2, roomHeight / 2, 0);
+
+            // Simple table
+            const tableGeometry = new THREE.BoxGeometry(2, 1, 1);
+            const tableMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+            const table = new THREE.Mesh(tableGeometry, tableMaterial);
+            table.position.set(0, 0.5, -1.5); // Placed against the back wall
+
+            interior.add(floor, backWall, sideWallRight, sideWallLeft, table);
+
+            // Position the interior at the house location
+            interior.position.set(x, groundYLevel, z);
+            return interior;
+        }
+
+
+        // --- Utility Function: Create a simple house model ---
+        function createHouse(x, z) {
+            const houseGroup = new THREE.Group();
+            const wallWidth = 6;
+            const wallDepth = 6;
+            const wallHeight = 5;
+           
+            // 1. Walls (Box) - This will be toggled off when inside
+            const wallGeometry = new THREE.BoxGeometry(wallWidth, wallHeight, wallDepth);
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown wood color
+            houseExteriorWalls = new THREE.Mesh(wallGeometry, wallMaterial);
+            houseExteriorWalls.position.y = wallHeight / 2;
+
+            // 2. Roof (Cone) - Stays visible
+            const roofRadius = wallWidth / 1.5;
+            const roofHeight = 3;
+            const roofGeometry = new THREE.ConeGeometry(roofRadius, roofHeight, 4);
+            const roofMaterial = new THREE.MeshLambertMaterial({ color: 0xA52A2A });
+            const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+            roof.rotation.y = Math.PI / 4;
+            roof.position.y = wallHeight + roofHeight / 2;
+
+            // 3. Door (Narrow Box) - Stays visible
+            const doorGeometry = new THREE.BoxGeometry(1, 2.5, 0.1);
+            const doorMaterial = new THREE.MeshLambertMaterial({ color: 0x5C3317 });
+            houseDoor = new THREE.Mesh(doorGeometry, doorMaterial);
+            houseDoor.position.set(0, 2.5 / 2, wallDepth / 2 + 0.05);
+
+            // Add all exterior parts to the group
+            houseGroup.add(houseExteriorWalls);
+            houseGroup.add(roof);
+            houseGroup.add(houseDoor);
+
+            // Create and add the interior group (starts hidden)
+            interiorGroup = createInterior(x, z);
+            interiorGroup.visible = false;
+            scene.add(interiorGroup);
+
+            houseGroup.position.set(x, groundYLevel, z);
+            return houseGroup;
+        }
+
+
+        // --- Initialization Function ---
+        function init() {
+            const container = document.getElementById('game-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            // 1. Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x3a3a3a); // Dark background
+
+            // 2. Camera Setup (Perspective)
+            camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+           
+            // 3. Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            container.appendChild(renderer.domElement);
+
+            // 4. Create the Flat Terrain
+            const planeGeometry = new THREE.PlaneGeometry(planeSize, planeSize, planeSegments, planeSegments);
+            const planeMaterial = new THREE.MeshPhongMaterial({ color: 0x6B8E23, side: THREE.DoubleSide, flatShading: true });
+            const groundPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+           
+            groundPlane.rotation.x = Math.PI / 2;
+            groundPlane.position.y = groundYLevel;
+            scene.add(groundPlane);
+
+            // 5. Add House in the Center
+            scene.add(createHouse(0, 0)); // Note: createHouse adds the interiorGroup to the scene too
+
+            // 6. Add Player Cube
+            const playerGeometry = new THREE.BoxGeometry(1, 1, 1);
+            const playerMaterial = new THREE.MeshLambertMaterial({ color: 0x4CAF50 });
+            playerCube = new THREE.Mesh(playerGeometry, playerMaterial);
+           
+            playerCube.position.set(0, groundYLevel + 0.5, 10);
+            scene.add(playerCube);
+
+            // 7. Add Trees (Forest)
+            const treeCount = 30;
+            for (let i = 0; i < treeCount; i++) {
+                const x = (Math.random() - 0.5) * 60;
+                const z = (Math.random() - 0.5) * 60;
+                scene.add(createTree(x, z));
+            }
+
+            // 8. Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 3);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5);
+            directionalLight.position.set(20, 30, 15);
+            scene.add(directionalLight);
+           
+            // 9. Grid Helper
+            const gridHelper = new THREE.GridHelper(planeSize, planeSegments, 0xaaaaaa, 0x555555);
+            gridHelper.position.y = groundYLevel - 0.01;
+            gridHelper.material.opacity = 0.15;
+            gridHelper.material.transparent = true;
+            scene.add(gridHelper);
+
+            // 10. Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+        }
+
+        // --- Handle window resize for responsiveness ---
+        function onWindowResize() {
+            const container = document.getElementById('game-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        // --- Input Handling (Key Press/Release) ---
+        function onKeyDown(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w':
+                    keys.w = true;
+                    break;
+                case 'a':
+                    keys.a = true;
+                    break;
+                case 's':
+                    keys.s = true;
+                    break;
+                case 'd':
+                    keys.d = true;
+                    break;
+                case ' ': // Spacebar for jumping
+                    const stableY = groundYLevel + 0.5;
+                    // Allow jumping if on the ground or on the roof
+                    if (Math.abs(playerCube.position.y - stableY) < 0.05 || Math.abs(playerCube.position.y - 5.5) < 0.05) {
+                        velocityY = jumpStrength;
+                    }
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w':
+                    keys.w = false;
+                    break;
+                case 'a':
+                    keys.a = false;
+                    break;
+                case 's':
+                    keys.s = false;
+                    break;
+                case 'd':
+                    keys.d = false;
+                    break;
+            }
+        }
+
+        // --- Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            let deltaX = 0;
+            let deltaZ = 0;
+
+            // 1. Calculate intended movement deltas
+            if (keys.w) {
+                deltaZ -= movementSpeed;
+            }
+            if (keys.s) {
+                deltaZ += movementSpeed;
+            }
+            if (keys.a) {
+                deltaX -= movementSpeed;
+            }
+            if (keys.d) {
+                deltaX += movementSpeed;
+            }
+           
+            // Calculate potential next position
+            const nextX = playerCube.position.x + deltaX;
+            const nextZ = playerCube.position.z + deltaZ;
+
+
+            // 2. WALL COLLISION CHECK (Only when outside the house)
+            if (!isInside) {
+                // Check if player is near the house area (optimization)
+                if (nextX > -5 && nextX < 5 && nextZ > -5 && nextZ < 5) {
+                   
+                    // --- X-AXIS COLLISION (Left/Right Walls) ---
+                    // If moving left and hitting the left wall
+                    if (nextX < COLLISION_X_MIN) {
+                        deltaX = 0;
+                        playerCube.position.x = COLLISION_X_MIN;
+                    }
+                    // If moving right and hitting the right wall
+                    else if (nextX > COLLISION_X_MAX) {
+                        deltaX = 0;
+                        playerCube.position.x = COLLISION_X_MAX;
+                    }
+                   
+                    // --- Z-AXIS COLLISION (Back Wall) ---
+                    // If moving backward (S) and hitting the back wall
+                    if (nextZ < COLLISION_Z_MIN) {
+                        deltaZ = 0;
+                        playerCube.position.z = COLLISION_Z_MIN;
+                    }
+                   
+                    // --- Z-AXIS COLLISION (Front Wall & Door) ---
+                    // If moving forward (W) and hitting the front wall boundary
+                    else if (nextZ > COLLISION_Z_MAX) {
+                        // Check if the collision point is outside the door opening
+                        if (nextX < DOOR_X_MIN || nextX > DOOR_X_MAX) {
+                            deltaZ = 0;
+                            playerCube.position.z = COLLISION_Z_MAX;
+                        }
+                        // If the player is within the DOOR_X range, deltaZ is kept, allowing entry.
+                    }
+                }
+            }
+           
+            // 3. Apply the (possibly adjusted) movement
+            playerCube.position.x += deltaX;
+            playerCube.position.z += deltaZ;
+           
+
+            // 4. JUMPING AND VERTICAL PHYSICS UPDATE
+            velocityY += gravity;
+            playerCube.position.y += velocityY;
+
+            const stableY = groundYLevel + 0.5; // Ground landing Y (0.5)
+            const roofLandingY = 5.5;          // Roof landing Y (Center of player cube when standing on 5-unit wall)
+
+            const playerX = playerCube.position.x;
+            const playerZ = playerCube.position.z;
+
+            const isOverRoofArea = (
+                playerX > -3 && playerX < 3 && // Within 6x6 footprint of the house
+                playerZ > -3 && playerZ < 3
+            );
+
+            // A. ROOF COLLISION CHECK (Prioritized)
+            // FIX: We added !isInside here so you only land on the roof if you are outside the house.
+            if (velocityY <= 0 && isOverRoofArea && !isInside) {
+                // If the player passed through the roof landing plane (5.5)
+                if (playerCube.position.y <= roofLandingY) {
+                    playerCube.position.y = roofLandingY;
+                    velocityY = 0;
+                }
+            }
+
+            // B. GROUND COLLISION CHECK (Fallback)
+            // Only check for ground if player is below the ground level (stableY)
+            if (playerCube.position.y < stableY) {
+                playerCube.position.y = stableY;
+                velocityY = 0;
+            }
+           
+            // 5. INTERIOR/EXTERIOR VISIBILITY TOGGLE LOGIC
+            // Door Entrance Zone (Threshold check is crucial for triggering entry/exit)
+            const isNearDoor = (
+                playerX > -1.0 && playerX < 1.0 &&
+                playerZ > 2.0 && playerZ < 3.5      
+            );
+
+            // House Interior Area (player is inside the box)
+            const isInsideWalls = (
+                playerX > -3 && playerX < 3 &&
+                playerZ > -3 && playerZ < 3
+            );
+
+            if (isNearDoor && !isInside) {
+                // Entering
+                isInside = true;
+                houseExteriorWalls.visible = false;
+                interiorGroup.visible = true;
+            } else if (!isNearDoor && isInside && !isInsideWalls) {
+                // Exiting (player is outside the threshold area and is definitely outside the main wall volume)
+                if (playerZ > 3.5 || playerZ < -3.5 || playerX > 3.5 || playerX < -3.5) {
+                    isInside = false;
+                    houseExteriorWalls.visible = true;
+                    interiorGroup.visible = false;
+                }
+            }
+
+
+            // 6. Make the camera follow the player cube
+            const cameraOffset = new THREE.Vector3(0, 5, 5);
+            const playerPos = playerCube.position;
+
+            camera.position.x = playerPos.x + cameraOffset.x;
+            camera.position.y = playerPos.y + cameraOffset.y + 0.5;
+            camera.position.z = playerPos.z + cameraOffset.z;
+
+            camera.lookAt(playerPos.x, playerPos.y, playerPos.z);
+
+            // 7. Render the scene
+            renderer.render(scene, camera);
+        }
+
+        // Start the game initialization and the animation loop on window load
+        window.onload = function () {
+            init();
+            animate();
+        }
+    </script>
+</body>
+</html>
+
